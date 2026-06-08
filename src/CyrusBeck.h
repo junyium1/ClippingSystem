@@ -1,6 +1,6 @@
 // CyrusBeck.h
 #pragma once
-#include "Geometry.h"
+#include "geometry.h"
 #include <optional>
 #include <utility>
 

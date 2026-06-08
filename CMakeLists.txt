@@ -36,5 +36,5 @@ target_include_directories(dev PRIVATE
 # Using glfw3::glfw3 is the standard for package managers like vcpkg or system installs
 target_link_libraries(dev PRIVATE
         OpenGL::GL
-        glfw3::glfw3
+        glfw
 )
