@@ -1,80 +1,125 @@
 #include "CyrusBeck.h"
-#include "geometry.h"
-#include <limits>
 
-std::optional<std::pair<Point2D, Point2D>> CyrusBeckClipper::clipLine(
-    Point2D p0,
-    Point2D p1,
-    const Polygon& clipPolygon)
+// Decoupe un segment [p0, p1] avec la methode parametrique de Cyrus-Beck.
+bool CyrusBeckClipper::clipLine(Point2D p0, Point2D p1, const Polygon& clipPolygon, Segment& result)
 {
-  //1
-  float tinf = std::numeric_limits<float>::lowest();
-  float tsup = std::numeric_limits<float>::max();
-  Vector2D D = subtract(p1, p0);
-  int nbsom = clipPolygon.vertices.size();
+    float tEnter = -1000000.0f;
+    float tExit = 1000000.0f;
+    Vector2D D = subtract(p1, p0);
+    int nbsom = (int)clipPolygon.vertices.size();
 
-  //2
-  for (int i = 0; i < nbsom; i++)
-  {
-    Point2D currentVertex = clipPolygon.vertices[i];
-    Point2D nextVertex = clipPolygon.vertices[(i + 1) % nbsom];
-
-    Vector2D edge = subtract(nextVertex, currentVertex);
-    Vector2D normale = {-edge.y, edge.x};
-    Vector2D w = subtract(p0, currentVertex);
-    float dn = dotProduct(D, normale);
-    float wn = dotProduct(w, normale);
-
-    if (dn == 0.0f)
+    for (int i = 0; i < nbsom; i++)
     {
-      if (wn < 0.0f)
-      {
-        return std::nullopt;
-      }
-    }
-    else
-    {
-      float t = -wn / dn;
+        Point2D currentVertex = clipPolygon.vertices[i];
+        Point2D nextVertex = clipPolygon.vertices[(i + 1) % nbsom];
 
-      if (dn > 0.0f)
-      {
-        if (t > tinf)
+        Vector2D edge = subtract(nextVertex, currentVertex);
+        Vector2D normale = {-edge.y, edge.x};
+        Vector2D w = subtract(p0, currentVertex);
+        float dn = dotProduct(D, normale);
+        float wn = dotProduct(w, normale);
+
+        if (dn == 0.0f)
         {
-          tinf = t;
+            if (wn < 0.0f)
+                return false;
         }
-      }
-      else
-      {
-        if (t < tsup)
+        else
         {
-          tsup = t;
+            float t = -wn / dn;
+
+            if (dn > 0.0f)
+            {
+                if (t > tEnter)
+                    tEnter = t;
+            }
+            else
+            {
+                if (t < tExit)
+                    tExit = t;
+            }
         }
-      }
     }
-  }
 
-  //3
-  if (tinf < tsup)
-  {
-    if (tinf < 0.0f && tsup > 1.0f)
+    if (tEnter >= tExit)
+        return false;
+
+    if (tEnter < 0.0f && tExit > 1.0f)
     {
-      return std::make_pair(p0, p1);
+        result.a = p0;
+        result.b = p1;
+        return true;
     }
-    else if (tinf > 1.0f || tsup < 0.0f)
+
+    if (tEnter > 1.0f || tExit < 0.0f)
+        return false;
+
+    if (tEnter < 0.0f)
+        tEnter = 0.0f;
+    if (tExit > 1.0f)
+        tExit = 1.0f;
+
+    result.a = { p0.x + D.x * tEnter, p0.y + D.y * tEnter };
+    result.b = { p0.x + D.x * tExit, p0.y + D.y * tExit };
+    return true;
+}
+
+// Decoupe un polygone par un polygone convexe (algorithme de Cyrus-Beck).
+Polygon CyrusBeckClipper::clipPolygon(const Polygon& subjectPolygon, const Polygon& clipPolygon)
+{
+    Polygon output = subjectPolygon;
+    size_t nClip = clipPolygon.vertices.size();
+
+    for (size_t i = 0; i < nClip && !output.vertices.empty(); i++)
     {
-      return std::nullopt;
+        Point2D edgeStart = clipPolygon.vertices[i];
+        Point2D edgeEnd = clipPolygon.vertices[(i + 1) % nClip];
+
+        Vector2D edge = subtract(edgeEnd, edgeStart);
+        Vector2D normale = {-edge.y, edge.x};
+
+        Polygon input = output;
+        output.vertices.clear();
+
+        Point2D S = input.vertices.back();
+        Vector2D W = subtract(S, edgeStart);
+        float sWN = dotProduct(W, normale);
+
+        for (size_t j = 0; j < input.vertices.size(); j++)
+        {
+            Point2D Pj = input.vertices[j];
+            Vector2D Wj = subtract(Pj, edgeStart);
+            float pjWN = dotProduct(Wj, normale);
+
+            bool sInside = sWN >= 0.0f;
+            bool pjInside = pjWN >= 0.0f;
+
+            if (pjInside)
+            {
+                if (!sInside)
+                {
+                    Vector2D D = subtract(Pj, S);
+                    float dn = dotProduct(D, normale);
+                    float t = -sWN / dn;
+                    output.vertices.push_back({ S.x + t * D.x, S.y + t * D.y });
+                }
+                output.vertices.push_back(Pj);
+            }
+            else if (sInside)
+            {
+                Vector2D D = subtract(Pj, S);
+                float dn = dotProduct(D, normale);
+                float t = -sWN / dn;
+                output.vertices.push_back({ S.x + t * D.x, S.y + t * D.y });
+            }
+
+            S = Pj;
+            sWN = pjWN;
+        }
     }
-    else
-    {
-      if (tinf < 0.0f) tinf = 0.0f;
-      if (tsup > 1.0f) tsup = 1.0f;
 
-      Point2D p0_clipped = { p0.x + D.x * tinf, p0.y + D.y * tinf };
-      Point2D p1_clipped = { p0.x + D.x * tsup, p0.y + D.y * tsup };
+    if (output.vertices.size() < 3)
+        return {};
 
-      return std::make_pair(p0_clipped, p1_clipped);
-    }
-  }
-
-  return std::nullopt;
+    return output;
 }
